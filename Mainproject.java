@@ -1,5 +1,8 @@
 package project;
 import java.util.*;
+import java.sql.*;
+
+
 
 public class Mainproject {
 
@@ -12,6 +15,20 @@ public class Mainproject {
         int stock;
         double price;
         MedicineNode right, left;
+    }
+    static Connection con;
+
+    static void connectDB() {
+        try {
+            con = DriverManager.getConnection(
+                "jdbc:postgresql://localhost:5432/pharmatrack",
+                "postgres",
+                "root" // change this
+            );
+            System.out.println("PostgreSQL Connected Successfully!");
+        } catch(Exception e) {
+            System.out.println("Connection Error: " + e);
+        }
     }
 
     // Helper struct for sorting / knapsack
@@ -27,6 +44,45 @@ public class Mainproject {
             price      = n.price;
         }
     }
+    
+ // ============================================================
+    //  SYNC DATABASE TO LOCAL BST MEMORY ON STARTUP
+    // ============================================================
+    static void loadDataFromDB() {
+        if (con == null) return;
+        
+        String query = "SELECT * FROM medicines";
+        try (Statement stmt = con.createStatement();
+             ResultSet rs = stmt.executeQuery(query)) {
+             
+            int count = 0;
+            while (rs.next()) {
+                MedicineNode nn = new MedicineNode();
+                nn.medicineId = rs.getInt("medicine_id");
+                nn.name = rs.getString("name");
+                nn.stock = rs.getInt("stock");
+                nn.price = rs.getDouble("price");
+                nn.left = nn.right = null;
+                
+                // Rebuild local BST
+                if (root == null) { root = nn; }
+                else {
+                    ptr = root;
+                    while (ptr != null) {
+                        pre = ptr;
+                        ptr = (nn.medicineId > ptr.medicineId) ? ptr.right : ptr.left;
+                    }
+                    if (nn.medicineId > pre.medicineId) pre.right = nn; else pre.left = nn;
+                }
+                count++;
+            }
+            if (count > 0) {
+                System.out.println("-> Synchronized " + count + " medicine records from PostgreSQL.");
+            }
+        } catch (SQLException e) {
+            System.out.println("Database Sync Error: " + e.getMessage());
+        }
+    }
 
     static MedicineNode root = null;
     static MedicineNode ptr, pre;
@@ -36,6 +92,8 @@ public class Mainproject {
     //  MAIN MENU
     // ============================================================
     public static void main(String[] args) {
+    	connectDB();
+    	loadDataFromDB();
         while (true) {
             System.out.println("\n=======================================================");
             System.out.println("          PHARMATRACK INTELLIGENT SYSTEM DASHBOARD     ");
@@ -82,19 +140,77 @@ case 12:   System.out.println("Shutting down PharmaTrack...");   System.exit(0);
     // ============================================================
     //  OPTION 1 — ADD MEDICINE (BST insert by ID)
     // ============================================================
+ // ============================================================
+    //  OPTION 1 — ADD MEDICINE (BST insert by ID + DB Sync)
+    // ============================================================
+ // ============================================================
+    //  OPTION 1 — ADD MEDICINE (BST insert by ID + DB Sync)
+    // ============================================================
+ // ============================================================
+    //  OPTION 1 — ADD MEDICINE / UPDATE EXISTING (BST + DB Sync)
+    // ============================================================
     static void create() {
-        MedicineNode nn = new MedicineNode();
         System.out.print("Enter Medicine ID   : ");
         int x = sc.nextInt(); sc.nextLine();
-        if (search(root, x) != null) {
-            System.out.println("Medicine ID " + x + " already exists. Use a unique ID.");
-            return;
+        
+        MedicineNode existingNode = search(root, x);
+        
+        // --- IF MEDICINE ALREADY EXISTS: CHOOSE TO UPDATE PRICE/STOCK ---
+        if (existingNode != null) {
+            System.out.println("\n[!] Medicine ID " + x + " (" + existingNode.name + ") already exists.");
+            System.out.println("  1. Update Price");
+            System.out.println("  2. Cancel and return");
+            System.out.print("Enter your choice: ");
+            int choice = sc.nextInt(); sc.nextLine();
+            
+            if (choice == 1) {
+                System.out.print("Enter New Price per Unit : Rs.");
+                double newPrice = sc.nextDouble();
+                
+                // 1. UPDATE POSTGRESQL PRICE
+                String updatePriceQuery = "UPDATE medicines SET price = ? WHERE medicine_id = ?";
+                try (PreparedStatement pstmt = con.prepareStatement(updatePriceQuery)) {
+                    pstmt.setDouble(1, newPrice);
+                    pstmt.setInt(2, x);
+                    pstmt.executeUpdate();
+                    System.out.println("-> Successfully updated price in PostgreSQL database.");
+                } catch (SQLException e) {
+                    System.out.println("Database Update Error: " + e.getMessage());
+                    return;
+                }
+                
+                // 2. UPDATE LOCAL BST MEMORY
+                existingNode.price = newPrice;
+                System.out.println("Price for '" + existingNode.name + "' updated to Rs." + newPrice + " successfully.");
+            } else {
+                System.out.println("Operation cancelled.");
+            }
+            return; // Exit method
         }
+        
+        // --- IF MEDICINE IS NEW: PROCEED WITH REGULAR INSERTION ---
+        MedicineNode nn = new MedicineNode();
         System.out.print("Enter Medicine Name  : "); nn.name  = sc.nextLine();
         System.out.print("Enter Stock Quantity : "); nn.stock = sc.nextInt();
         System.out.print("Enter Price per Unit : Rs."); nn.price = sc.nextDouble();
         nn.medicineId = x; nn.left = nn.right = null;
 
+        // 1. SAVE NEW TO DATABASE
+        String query = "INSERT INTO medicines (medicine_id, name, stock, price) VALUES (?, ?, ?, ?)";
+        try (PreparedStatement pstmt = con.prepareStatement(query)) {
+            pstmt.setInt(1, x);
+            pstmt.setString(2, nn.name);
+            pstmt.setInt(3, nn.stock);
+            pstmt.setDouble(4, nn.price);
+            
+            pstmt.executeUpdate(); 
+            System.out.println("-> Successfully saved new medicine to PostgreSQL database.");
+        } catch (SQLException e) {
+            System.out.println("Database Insertion Error: " + e.getMessage());
+            return; 
+        }
+
+        // 2. SAVE NEW TO LOCAL BST MEMORY
         if (root == null) { root = nn; }
         else {
             ptr = root;
@@ -104,7 +220,7 @@ case 12:   System.out.println("Shutting down PharmaTrack...");   System.exit(0);
             }
             if (x > pre.medicineId) pre.right = nn; else pre.left = nn;
         }
-        System.out.println("Medicine '" + nn.name + "' added successfully.");
+        System.out.println("Medicine '" + nn.name + "' added to local inventory system.");
     }
 
     // ============================================================
@@ -183,6 +299,9 @@ case 12:   System.out.println("Shutting down PharmaTrack...");   System.exit(0);
     // ============================================================
     //  OPTION 12 — PRESCRIPTION / BILLING
     // ============================================================
+ // ============================================================
+    //  OPTION 6 — PRESCRIPTION / BILLING (BST + DB UPDATE)
+    // ============================================================
     static void prescription() {
         if (root == null) { System.out.println("No medicines in inventory."); return; }
         System.out.println("\n============================================");
@@ -202,8 +321,22 @@ case 12:   System.out.println("Shutting down PharmaTrack...");   System.exit(0);
             int qty = sc.nextInt();
             if (qty <= 0)         { System.out.println("  [!] Invalid quantity."); continue; }
             if (qty > med.stock)  { System.out.println("  [!] Only " + med.stock + " units available."); continue; }
+            
             double cost = qty * med.price;
-            med.stock -= qty; total += cost; lines++;
+            med.stock -= qty; // Update local memory
+            
+            // --- 1. UPDATE POSTGRESQL STOCK IN REAL-TIME ---
+            String updateQuery = "UPDATE medicines SET stock = ? WHERE medicine_id = ?";
+            try (PreparedStatement uPstmt = con.prepareStatement(updateQuery)) {
+                uPstmt.setInt(1, med.stock);
+                uPstmt.setInt(2, med.medicineId);
+                uPstmt.executeUpdate();
+            } catch (SQLException e) {
+                System.out.println("  [!] Warning: Failed to sync updated stock to database: " + e.getMessage());
+            }
+            // -----------------------------------------------
+
+            total += cost; lines++;
             System.out.printf("  Added: %d x %s = Rs.%.2f  (Remaining stock: %d)%n", qty, med.name, cost, med.stock);
         }
         System.out.println("\n============================================");
@@ -214,16 +347,29 @@ case 12:   System.out.println("Shutting down PharmaTrack...");   System.exit(0);
         System.out.println("============================================");
     }
 
-    // ============================================================
-    //  OPTION 5 — DELETE
+ // ============================================================
+    //  OPTION 5 — DELETE MEDICINE (BST + Database Sync)
     // ============================================================
     public static void delete() {
         if (root == null) { System.out.println("Inventory is empty."); return; }
         System.out.print("Enter Medicine ID to remove: ");
         int x = sc.nextInt();
         if (search(root, x) == null) { System.out.println("ID " + x + " not found."); return; }
+        
+        // 1. DELETE FROM POSTGRESQL
+        String query = "DELETE FROM medicines WHERE medicine_id = ?";
+        try (PreparedStatement pstmt = con.prepareStatement(query)) {
+            pstmt.setInt(1, x);
+            pstmt.executeUpdate();
+            System.out.println("-> Successfully removed from PostgreSQL database.");
+        } catch (SQLException e) {
+            System.out.println("Database Deletion Error: " + e.getMessage());
+            return;
+        }
+
+        // 2. DELETE FROM LOCAL BST
         root = deleteRec(root, x);
-        System.out.println("Medicine ID " + x + " removed.");
+        System.out.println("Medicine ID " + x + " removed from local inventory system.");
     }
     static MedicineNode deleteRec(MedicineNode n, int key) {
         if (n == null) return null;
